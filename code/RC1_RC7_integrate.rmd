@@ -1,0 +1,339 @@
+#### load libraries
+
+```{r}
+library(tidyverse)
+library(tximport)
+library(DESeq2)
+library(readxl)
+library(PCAtools)
+source("/project/imoskowitz/shared/software/helper_functions/carlosFunc_3.R")
+source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
+
+```
+
+#### create directories
+```{r}
+dir.create("pdfs", mode = "750")
+dir.create("data", mode = "750")
+dir.create("code", mode = "750")
+```
+
+#### import data
+```{r}
+txi_RC7 <- salmon_import("/project/imoskowitz/shared/sequencing.processed/20241025_LH00315_0309_A22NVHHLT3-XRS40-IM-RS21/star_salmon")
+txi_RC1 <- salmon_import("/project/imoskowitz/shared/sequencing.processed/RC1/star_salmon")
+```
+
+#### import metadata
+```{r}
+
+metadata_RC7 <- load_metadata("/project/imoskowitz/shared/metasheets/sample_sheets/RC07_mESCCPs_Sample_metasheet_v17.xlsx")
+metadata_RC1 <- load_metadata("/project/imoskowitz/shared/metasheets/sample_sheets/Sample_RC1_bulkRNAseq_Gli1FTA.xlsx")
+
+metadata_RC1_noBMP <- subset(metadata_RC1, grepl("NoBMP4", metadata_RC1$Sample.name))
+
+txi_RC1_noBMP <- lapply(txi_RC1[1:3], function(x) x[ , colnames(x) %in% rownames(metadata_RC1_noBMP)])
+
+metadata_RC1_noBMP <- metadata_RC1_noBMP[match(colnames(txi_RC1_noBMP[[2]]), rownames(metadata_RC1_noBMP)), ]
+metadata_RC7 <- metadata_RC7[match(colnames(txi_RC7[[2]]), rownames(metadata_RC7)), ]
+
+txi_RC1_noBMP$countsFromAbundance <- "no"
+```
+
+#### run DESeq2 and pulll raw counts
+```{r}
+metadata_RC7$batch <- str_extract(string = metadata_RC7$Sample.name, pattern = "DC02[0-9]")
+
+dds_RC1_noBMP <- DESeqDataSetFromTximport(txi_RC1_noBMP, metadata_RC1_noBMP, design = ~ time_condition)
+dds_RC7 <- DESeqDataSetFromTximport(txi_RC7, metadata_RC7, design = ~ batch+time_condition)
+
+RC7_counts <- counts(dds_RC7, normalized = FALSE)
+RC1_counts <- counts(dds_RC1_noBMP, normalized = FALSE)
+
+```
+
+#### get average raw counts per timepoint/condition for RC1 and also get collaspsereps
+```{r}
+RC1_collapsed <- collapseReplicates(dds_RC1_noBMP, dds_RC1_noBMP$time_condition, renameCols = TRUE) %>%
+counts(normalized = FALSE)
+
+RC1_counts_avg <- reshape2::melt(RC1_counts) %>%
+  merge(metadata_RC1_noBMP[7], by.x = "Var2", by.y = 0) %>%#
+  group_by(Var1, time_condition) %>%
+  summarise(mean = mean(value)) %>%
+  reshape2::dcast(Var1 ~ time_condition, value.var = "mean") %>%
+  column_to_rownames("Var1") %>% round()
+
+colnames(RC1_counts_avg) <- paste0(colnames(RC1_counts_avg), "_RC1")
+colnames(RC1_collapsed) <- paste0(colnames(RC1_collapsed), "_RC1")
+
+RC1_metadata_combined_reps <- metadata_RC1_noBMP %>%
+remove_rownames() %>%
+select(Age.stage, treatment,time_condition) %>%
+unique()
+
+rownames(RC1_metadata_combined_reps) <- paste0(RC1_metadata_combined_reps$time_condition, "_RC1")
+
+RC1_counts_avg <- select(RC1_counts_avg, all_of(rownames(RC1_metadata_combined_reps)))
+
+```
+
+#### check and correct for batch effects in RC7
+```{r}
+
+### try DESeq2 batch correction
+dds_RC7 <- DESeqDataSetFromTximport(txi_RC7, metadata_RC7,
+design = ~batch+time_condition) %>%
+DESeq(.)
+
+RC7_res <-results(dds_RC7 , contrast = c("time_condition", "D6_dox", "D6_ctrl"), alpha = 0.05) %>%
+    lfcShrink(dds = dds_RC7,
+              res = .,
+              contrast = c("time_condition", "D6_dox", "D6_ctrl"),
+              type = 'normal') %>%
+summary()
+
+#plot GLI1 boxplot 
+vst <- varianceStabilizingTransformation(dds_RC7, blind = FALSE)
+pca <- PCAtools::pca(assay(vst), metadata = metadata_RC7, removeVar = 0.9)
+PCAtools::biplot(pca, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC7_DESeq2_batch_correction.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+assay(vst) %>% reshape2::melt() %>%
+subset(Var1 == "Gli1") %>%
+merge(.,metadata_RC7, by.x = "Var2", by.y= 0) %>%
+ggplot(aes(y = value, x = Age.stage, color = time_condition)) +
+geom_boxplot(outlier.shape = NA) +
+ggrastr::geom_beeswarm_rast(size = 1) +
+ggtitle("Gli1") +
+theme_minimal(base_size = 15)
+
+ggsave(filename = "Gli1_boxplot_RC7_DESeq2_batch_correction.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+### try combatseq
+
+
+dds_RC7 <-counts(dds_RC7) %>% as.matrix() %>%
+sva::ComBat_seq(., batch = metadata_RC7$batch, group = metadata_RC7$time_condition) %>%
+DESeqDataSetFromMatrix(., metadata_RC7, design = ~batch+time_condition) %>%
+DESeq(.)
+
+results(dds_RC7 , contrast = c("time_condition", "D6_dox", "D6_ctrl"), alpha = 0.05) %>%
+    lfcShrink(dds = dds_RC7,
+              res = .,
+              contrast = c("time_condition", "D6_dox", "D6_ctrl"),
+              type = 'normal') %>%
+summary()
+
+vst_combat <- varianceStabilizingTransformation(dds_RC7, blind = FALSE)
+pca_combat <- PCAtools::pca(assay(vst_combat), metadata = metadata_RC7, removeVar = 0.9)
+PCAtools::biplot(pca_combat, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch",
+                pointSize = 3,
+                labSize = 2)
+ggsave(filename = "pca_biplot_time_condition_RC7_combatseq.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+assay(vst_combat) %>% reshape2::melt() %>%
+subset(Var1 == "Gli1") %>%
+merge(.,metadata_RC7, by.x = "Var2", by.y= 0) %>%
+ggplot(aes(y = value, x = Age.stage, color = time_condition)) +
+geom_boxplot(outlier.shape = NA) +
+ggrastr::geom_beeswarm_rast(size = 1) +
+ggtitle("Gli1") +
+theme_minimal(base_size = 15)
+
+ggsave(filename = "Gli1_boxplot_RC7_combatseq.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+
+```
+
+
+
+
+#### merge RC1 and RC7 counts while correcting for batch effects between the two with DESeq2 (soft correction)
+```{r}
+RC7_metadata_s <- select(metadata_RC7, Age.stage, treatment,batch,time_condition) 
+RC7_metadata_s$batch_exp <- "0"
+RC7_metadata_s$Sample_name <- paste0( RC7_metadata_s$time_condition, "_", rownames(RC7_metadata_s)) %>%
+gsub(pattern = "RC7_R", replacement = "R")
+
+idx <- match(colnames(RC7_counts), rownames(RC7_metadata_s))
+colnames(RC7_counts)[idx] <- RC7_metadata_s$Sample_name[idx]
+rownames(RC7_metadata_s) <- RC7_metadata_s$Sample_name
+
+
+RC1_metadata_combined_reps$batch_exp <- "1"
+RC1_metadata_combined_reps$batch <- "n"
+RC1_metadata_combined_reps$Sample_name <- rownames(RC1_metadata_combined_reps)
+RC1_RC7_metadata <- rbind(RC1_metadata_combined_reps, RC7_metadata_s)
+
+RC1_RC7_metadata$time_condition <- gsub(pattern = "oe", 
+replacement = "dox", x = RC1_RC7_metadata$time_condition)
+
+
+RC1_RC7_counts <- merge(RC1_counts_avg, RC7_counts, by =0) %>%
+  column_to_rownames("Row.names") %>%
+  select(all_of(rownames(RC1_RC7_metadata)))
+
+dds_RC1_RC7 <- DESeqDataSetFromMatrix(RC1_RC7_counts, 
+RC1_RC7_metadata, design = ~ batch+time_condition) %>%
+DESeq(.)
+vst_RC1_RC7 <- varianceStabilizingTransformation(dds_RC1_RC7, blind = FALSE)
+### check batch with PCA, heatmap, and boxplots
+#plot GLI1 boxplot 
+vst_assay <- assay(vst_RC1_RC7)
+
+vst_assay %>% reshape2::melt() %>%
+subset(Var1 == "Gli1") %>%
+merge(., RC1_RC7_metadata, by.x = "Var2", by.y= 0) %>%
+mutate(Age.stage = factor(Age.stage, levels = c("D5","D5.6h", "D6", "D7","D8","D12"))) %>%
+ggplot(aes(y = value, x = Age.stage, color = time_condition)) +
+geom_boxplot(outlier.shape = NA) +
+ggrastr::geom_beeswarm_rast(size = 1) +
+ggtitle("Gli1") +
+theme_minimal(base_size = 15)
+
+ggsave(filename = "Gli1_boxplot_RC1_RC7_DESeq2_batch_correction.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+pca <- PCAtools::pca(vst_assay, metadata = RC1_RC7_metadata, removeVar = 0.9)
+
+PCAtools::biplot(pca, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+### check only day 8 in PCA
+vst_assay_day8 <- vst_assay[ , RC1_RC7_metadata$Age.stage == "D8" ]
+
+pca_day8 <- PCAtools::pca(vst_assay_day8, metadata = RC1_RC7_metadata[RC1_RC7_metadata$Age.stage == "D8", ], removeVar = 0.9)
+PCAtools::biplot(pca_day8, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_D8.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+
+pdf(file = "pdfs/heatmap_sample_cor_RC1_RC7.pdf", height = 7, width = 14)
+
+vst_assay %>%
+  cor() %>%
+  pheatmap::pheatmap(scale = "none",
+    display_numbers = T,
+    annotation_row = RC1_RC7_metadata[c("time_condition", "batch_exp")],
+    annotation_col = RC1_RC7_metadata[c("time_condition", "batch_exp")])
+
+dev.off()
+
+saveRDS(dds_RC1_RC7, file = "data/dds_RC1_RC7_DESeq2_batch_correction.rds")
+
+```
+
+
+#### try the batch correction with combatseq
+```{r}
+
+RC1_RC7_counts_combat <- sva::ComBat_seq( as.matrix(RC1_RC7_counts),
+batch = RC1_RC7_metadata$batch_exp,
+group = RC1_RC7_metadata$time_condition)
+
+dds_RC1_RC7_combat <- DESeqDataSetFromMatrix(RC1_RC7_counts_combat, 
+RC1_RC7_metadata, design = ~ time_condition)
+
+dds_RC1_RC7_combat <- DESeq(dds_RC1_RC7)
+vst_RC1_RC7_combat <- varianceStabilizingTransformation(dds_RC1_RC7_combat, blind = FALSE)
+
+
+vst_assay_combat <- assay(vst_RC1_RC7_combat)
+pca_combat <- PCAtools::pca(vst_assay_combat, metadata = RC1_RC7_metadata, removeVar = 0.9)
+
+PCAtools::biplot(pca_combat, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_combat.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+### check only day 8 in PCA
+vst_assay_day8_combat <- vst_assay_combat[ , RC1_RC7_metadata$Age.stage == "D8" ]
+
+pca_day8_combat <- PCAtools::pca(vst_assay_day8_combat, metadata = RC1_RC7_metadata[RC1_RC7_metadata$Age.stage == "D8", ], removeVar = 0.9)
+PCAtools::biplot(pca_day8_combat, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_D8_combat.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+
+pdf(file = "pdfs/heatmap_sample_cor_RC1_RC7_combat.pdf", height = 7, width = 14)
+
+vst_assay_combat %>%
+  cor() %>%
+  pheatmap::pheatmap(scale = "none",
+    display_numbers = T,
+    annotation_row = RC1_RC7_metadata[c("time_condition", "batch_exp")],
+    annotation_col = RC1_RC7_metadata[c("time_condition", "batch_exp")])
+
+dev.off()
+
+
+saveRDS(dds_RC1_RC7_combat, file = "data/dds_RC1_RC7_combat.rds")
+```
+
+
