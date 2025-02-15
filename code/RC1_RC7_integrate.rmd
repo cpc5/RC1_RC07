@@ -202,7 +202,7 @@ RC1_RC7_counts <- merge(RC1_counts_avg, RC7_counts, by =0) %>%
   select(all_of(rownames(RC1_RC7_metadata)))
 
 dds_RC1_RC7 <- DESeqDataSetFromMatrix(RC1_RC7_counts, 
-RC1_RC7_metadata, design = ~ batch+time_condition) %>%
+RC1_RC7_metadata, design = ~ time_condition+batch) %>%
 DESeq(.)
 vst_RC1_RC7 <- varianceStabilizingTransformation(dds_RC1_RC7, blind = FALSE)
 ### check batch with PCA, heatmap, and boxplots
@@ -337,3 +337,134 @@ saveRDS(dds_RC1_RC7_combat, file = "data/dds_RC1_RC7_combat.rds")
 ```
 
 
+#### perform various contrats and save results
+```{r}
+my_contrasts <- list(
+D5.6h_dox_vs_D5.6h_ctrl = c("time_condition", "D5.6h_dox", "D5.6h_ctrl"),
+D6_dox_vs_D6_ctrl = c("time_condition", "D6_dox", "D6_ctrl"),
+D7_dox_vs_D7_ctrl = c("time_condition", "D7_dox", "D7_ctrl"),
+D8_dox_vs_D8_ctrl = c("time_condition", "D8_dox", "D8_ctrl"),
+D12_dox_vs_D12_ctrl = c("time_condition", "D12_dox", "D12_ctrl"))
+
+deseq_results <- list()
+
+for (contrast in names(my_contrasts)) {
+    deseq_results[[contrast]] <- get_deseq_results(dds_RC1_RC7,
+    contrast = my_contrasts[[contrast]][1], 
+    treatment = my_contrasts[[contrast]][2],
+    control = my_contrasts[[contrast]][3])
+
+write.csv(deseq_results[[contrast]],
+file = paste0("data/Table_deseq2_results_", contrast, ".csv"))
+
+}
+
+
+# Plot volcanos and save results
+for (i in 1:length(deseq_results)) {
+  res <- deseq_results[[i]]
+  gg_volcano3(res,
+              abs_lfc = 0,
+              p.cutoff = 0.05,
+              up.color = "darkseagreen",
+              down.color = "plum4") +
+    gg_geneLabel4(res,
+                  gene_col = "gene_id",
+                  colorText = "black",
+                  plotGenes = c("Foxf1",'Gli1', 'Hhip', 'Ptch1')) +
+    theme_bw(base_size = 16) +
+    annotate(
+      geom = "text",
+      x = c(-Inf, Inf),
+      y = c(Inf, Inf),
+      hjust = c(-0.5, 1.5),
+      vjust = c(2, 2),
+      label = c(nrow(subset(res, log2FoldChange < 0 & padj < 0.05)),
+                nrow(subset(res, log2FoldChange > 0 & padj < 0.05))),
+      size = 6
+    ) +
+    ggtitle(names(deseq_results)[i])
+  
+  ggsave(filename = paste0("volcano_", names(deseq_results)[i], ".pdf"),
+         plot = last_plot(),
+         device = "pdf",
+         width = 5, height = 5,
+         path = "pdfs")
+}
+
+# Run clusterProfiler
+go_df_up <- list()
+
+for (i in 1:length(deseq_results)) {
+  tryCatch({
+    res <- deseq_results[[i]]
+    
+    x <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange > 0)$gene_id,
+               univr_vector = res$gene_id,
+               ont = "BP",
+               organism = 'mouse',
+               simplify = TRUE)
+    
+    plotGO(obj = x,
+           topTerms = 5,
+           muhcolor = "darkseagreen",
+           strWrap = 30,
+           barWidth = 0.5,
+           expandY = c(0.1,0))
+    
+    ggsave(filename = paste0("GO_BP_", names(deseq_results)[i], "_up.pdf"),
+           plot = last_plot(),
+           device = "pdf",
+           width = 7, height = 5,
+           path = "pdfs")
+    
+    go_df_up[[i]] <- x
+    names(go_df_up)[i] <- paste0("GO_BP_", names(deseq_results)[i], "_up")
+    
+  }, error = function(e){cat("ERROR :", conditionMessage(e), "\n")})
+}
+
+# Now down
+go_df_down <- list()
+for (i in 1:length(deseq_results)) {
+  tryCatch({
+    res <- deseq_results[[i]]
+    
+    y <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange < 0)$gene_id,
+               univr_vector = res$gene_id,
+               ont = "BP",
+               organism = 'mouse',
+               simplify = TRUE)
+    
+    plotGO(obj = y,
+           topTerms = 5,
+           muhcolor = "plum4",
+           strWrap = 30,
+           barWidth = 0.5,
+           expandY = c(0.1,0))
+    
+    ggsave(filename = paste0("GO_BP_", names(deseq_results)[i], "_down.pdf"),
+           plot = last_plot(),
+           device = "pdf",
+           width = 7, height = 5,
+           path = "pdfs")
+    
+    go_df_down[[i]] <- y
+    names(go_df_down)[i] <- paste0("GO_BP_", names(deseq_results)[i], "_down")
+  }, error = function(e){cat("ERROR :", conditionMessage(e), "\n")})
+}
+
+go_df_up <- Filter(length, go_df_up)
+go_df_down <- Filter(length, go_df_down)
+
+writexl::write_xlsx(
+  lapply(go_df_down, data.frame),
+  "data/Table_GO_BP_down_padj0.05.xlsx")
+
+writexl::write_xlsx(
+  lapply(go_df_up, data.frame),
+  "data/Table_GO_BP_up_padj0.05.xlsx")
+
+
+
+```
