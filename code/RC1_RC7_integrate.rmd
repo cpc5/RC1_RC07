@@ -1,11 +1,11 @@
 #### load libraries
 
 ```{r}
-library(tidyverse)
-library(tximport)
-library(DESeq2)
-library(readxl)
-library(PCAtools)
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(tximport))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(PCAtools))
 source("/project/imoskowitz/shared/software/helper_functions/carlosFunc_3.R")
 source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
 
@@ -30,7 +30,7 @@ txi_RC1 <- salmon_import("/project/imoskowitz/shared/sequencing.processed/RC1/st
 metadata_RC7 <- load_metadata("/project/imoskowitz/shared/metasheets/sample_sheets/RC07_mESCCPs_Sample_metasheet_v17.xlsx")
 metadata_RC1 <- load_metadata("/project/imoskowitz/shared/metasheets/sample_sheets/Sample_RC1_bulkRNAseq_Gli1FTA.xlsx")
 
-metadata_RC1_noBMP <- subset(metadata_RC1, grepl("NoBMP4", metadata_RC1$Sample.name))
+metadata_RC1_noBMP <- subset(metadata_RC1, !grepl("wBMP4", metadata_RC1$Sample.name))
 
 txi_RC1_noBMP <- lapply(txi_RC1[1:3], function(x) x[ , colnames(x) %in% rownames(metadata_RC1_noBMP)])
 
@@ -208,23 +208,6 @@ vst_RC1_RC7 <- varianceStabilizingTransformation(dds_RC1_RC7, blind = FALSE)
 ### check batch with PCA, heatmap, and boxplots
 #plot GLI1 boxplot 
 vst_assay <- assay(vst_RC1_RC7)
-
-vst_assay %>% reshape2::melt() %>%
-subset(Var1 == "Gli1") %>%
-merge(., RC1_RC7_metadata, by.x = "Var2", by.y= 0) %>%
-mutate(Age.stage = factor(Age.stage, levels = c("D5","D5.6h", "D6", "D7","D8","D12"))) %>%
-ggplot(aes(y = value, x = Age.stage, color = time_condition)) +
-geom_boxplot(outlier.shape = NA) +
-ggrastr::geom_beeswarm_rast(size = 1) +
-ggtitle("Gli1") +
-theme_minimal(base_size = 15)
-
-ggsave(filename = "Gli1_boxplot_RC1_RC7_DESeq2_batch_correction.pdf",
-       plot = last_plot(),
-       device = "pdf",
-       width = 8, height = 5,
-       path = "pdfs")
-dev.off()
 
 pca <- PCAtools::pca(vst_assay, metadata = RC1_RC7_metadata, removeVar = 0.9)
 
