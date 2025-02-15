@@ -284,7 +284,7 @@ group = RC1_RC7_metadata$time_condition)
 dds_RC1_RC7_combat <- DESeqDataSetFromMatrix(RC1_RC7_counts_combat, 
 RC1_RC7_metadata, design = ~ time_condition)
 
-dds_RC1_RC7_combat <- DESeq(dds_RC1_RC7)
+dds_RC1_RC7_combat <- DESeq(dds_RC1_RC7_combat)
 vst_RC1_RC7_combat <- varianceStabilizingTransformation(dds_RC1_RC7_combat, blind = FALSE)
 
 
