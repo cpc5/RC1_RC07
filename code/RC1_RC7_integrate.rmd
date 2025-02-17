@@ -11,12 +11,6 @@ source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
 
 ```
 
-#### create directories
-```{r}
-dir.create("pdfs", mode = "750")
-dir.create("data", mode = "750")
-dir.create("code", mode = "750")
-```
 
 #### import data
 ```{r}
@@ -125,12 +119,14 @@ ggsave(filename = "Gli1_boxplot_RC7_DESeq2_batch_correction.pdf",
        path = "pdfs")
 dev.off()
 
+saveRDS(dds_RC7, file = "data/RC7_dds_DESeq2_batch_correction.rds")
+
 ### try combatseq
 
 
 dds_RC7 <-counts(dds_RC7) %>% as.matrix() %>%
 sva::ComBat_seq(., batch = metadata_RC7$batch, group = metadata_RC7$time_condition) %>%
-DESeqDataSetFromMatrix(., metadata_RC7, design = ~batch+time_condition) %>%
+DESeqDataSetFromMatrix(., metadata_RC7, design = ~time_condition) %>%
 DESeq(.)
 
 results(dds_RC7 , contrast = c("time_condition", "D6_dox", "D6_ctrl"), alpha = 0.05) %>%
@@ -170,7 +166,7 @@ ggsave(filename = "Gli1_boxplot_RC7_combatseq.pdf",
        path = "pdfs")
 dev.off()
 
-
+saveRDS(dds_RC7, file = "data/RC7_dds_combatseq.rds")
 ```
 
 
@@ -202,11 +198,10 @@ RC1_RC7_counts <- merge(RC1_counts_avg, RC7_counts, by =0) %>%
   select(all_of(rownames(RC1_RC7_metadata)))
 
 dds_RC1_RC7 <- DESeqDataSetFromMatrix(RC1_RC7_counts, 
-RC1_RC7_metadata, design = ~ time_condition+batch) %>%
+RC1_RC7_metadata, design = ~ batch_exp+time_condition) %>%
 DESeq(.)
 vst_RC1_RC7 <- varianceStabilizingTransformation(dds_RC1_RC7, blind = FALSE)
-### check batch with PCA, heatmap, and boxplots
-#plot GLI1 boxplot 
+### check batch with PCA, heatmap
 vst_assay <- assay(vst_RC1_RC7)
 
 pca <- PCAtools::pca(vst_assay, metadata = RC1_RC7_metadata, removeVar = 0.9)
@@ -217,12 +212,33 @@ PCAtools::biplot(pca, colby = "time_condition",
                 pointSize = 3,
                 labSize = 2)
 
-ggsave(filename = "pca_biplot_time_condition_RC1_RC7.pdf",
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_DESeq2_batch_correction.pdf",
        plot = last_plot(),
        device = "pdf",
        width = 8, height = 5,
        path = "pdfs")
 dev.off()
+
+### omit day4 , mESC, and day 12
+RC1_RC7_metadata_selected <- subset(RC1_RC7_metadata, !Age.stage %in% c("D4", "mESC", "D12"))
+vst_assay_selected <- select( data.frame(vst_assay), all_of(rownames(RC1_RC7_metadata_selected)))
+
+pca_combat_selected <- PCAtools::pca(vst_assay_selected, metadata = RC1_RC7_metadata_selected, removeVar = 0.9)
+PCAtools::biplot(pca_combat_selected, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_DESeq2_batch_correction_nod4d17messc.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+
+
 ### check only day 8 in PCA
 vst_assay_day8 <- vst_assay[ , RC1_RC7_metadata$Age.stage == "D8" ]
 
@@ -233,7 +249,7 @@ PCAtools::biplot(pca_day8, colby = "time_condition",
                 pointSize = 3,
                 labSize = 2)
 
-ggsave(filename = "pca_biplot_time_condition_RC1_RC7_D8.pdf",
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_D8_DESeq2_batch_correction.pdf",
        plot = last_plot(),
        device = "pdf",
        width = 8, height = 5,
@@ -241,7 +257,7 @@ ggsave(filename = "pca_biplot_time_condition_RC1_RC7_D8.pdf",
 dev.off()
 
 
-pdf(file = "pdfs/heatmap_sample_cor_RC1_RC7.pdf", height = 7, width = 14)
+pdf(file = "pdfs/heatmap_sample_cor_RC1_RC7_DESeq2_batch_correction.pdf", height = 7, width = 14)
 
 vst_assay %>%
   cor() %>%
@@ -286,6 +302,27 @@ ggsave(filename = "pca_biplot_time_condition_RC1_RC7_combat.pdf",
        width = 8, height = 5,
        path = "pdfs")
 dev.off()
+
+
+### omit day4 , mESC, and day 12
+RC1_RC7_metadata_selected <- subset(RC1_RC7_metadata, !Age.stage %in% c("D4", "mESC", "D12"))
+vst_assay_combat_selected <- select( data.frame(vst_assay), all_of(rownames(RC1_RC7_metadata_selected)))
+
+pca_combat_selected <- PCAtools::pca(vst_assay_combat_selected, metadata = RC1_RC7_metadata_selected, removeVar = 0.9)
+PCAtools::biplot(pca_combat_selected, colby = "time_condition",
+                legendPosition = "right",
+                shape = "batch_exp",
+                pointSize = 3,
+                labSize = 2)
+
+ggsave(filename = "pca_biplot_time_condition_RC1_RC7_combat_nod4d17messc.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+
 ### check only day 8 in PCA
 vst_assay_day8_combat <- vst_assay_combat[ , RC1_RC7_metadata$Age.stage == "D8" ]
 
@@ -325,9 +362,7 @@ saveRDS(dds_RC1_RC7_combat, file = "data/dds_RC1_RC7_combat.rds")
 my_contrasts <- list(
 D5.6h_dox_vs_D5.6h_ctrl = c("time_condition", "D5.6h_dox", "D5.6h_ctrl"),
 D6_dox_vs_D6_ctrl = c("time_condition", "D6_dox", "D6_ctrl"),
-D7_dox_vs_D7_ctrl = c("time_condition", "D7_dox", "D7_ctrl"),
-D8_dox_vs_D8_ctrl = c("time_condition", "D8_dox", "D8_ctrl"),
-D12_dox_vs_D12_ctrl = c("time_condition", "D12_dox", "D12_ctrl"))
+D8_dox_vs_D8_ctrl = c("time_condition", "D8_dox", "D8_ctrl"))
 
 deseq_results <- list()
 
