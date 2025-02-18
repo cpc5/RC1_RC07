@@ -1,0 +1,51 @@
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(maSigPro))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(readxl))
+
+source("/project/imoskowitz/shared/software/helper_functions/carlosFunc_3.R")
+source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
+
+RC1_RC7_DESeq2 <- readRDS("./data/dds_RC1_RC7_DESeq2_batch_correction.rds")
+
+
+```
+
+#### prepare data for maSigPro
+```{r}
+
+stage_order <- c("D4", "D5", "D5.6h", "D6", "D7", "D8", "D12")
+rep_factor <- colData(RC1_RC7_DESeq2)$time_condition %>%
+factor(levels = c("D4_ctrl", "D5_ctrl", "D5.6h_ctrl",
+"D6_ctrl", "D7_ctrl", "D8_ctrl", "D12_ctrl")) %>%
+as.numeric()
+# Apply custom ordering
+colData(RC1_RC7_DESeq2) %>% 
+data.frame() %>%
+subset(., !Age.stage=="mESC") %>%
+select(Age.stage, treatment, time_condition) %>%
+mutate(Age.stage = factor(Age.stage, levels = stage_order)) %>%
+.[order(.$Age.stage, decreasing = FALSE),] %>%
+mutate(Replicate = as.numeric(factor(time_condition,
+    levels=c("D4_ctrl", "D5_ctrl", "D5.6h_ctrl","D5.6h_dox",   
+    "D6_ctrl", "D6_dox", "D7_ctrl", "D7_dox", "D8_ctrl", "D8_dox", "D12_ctrl", "D12_dox")) )) %>%
+mutate(Time = as.numeric(Age.stage)) %>%
+mutate(ctrl = as.numeric(treatment == "ctrl")) %>%
+mutate(dox = as.numeric(treatment %in% c("dox", "oe"))) %>%
+select(Time,Replicate, ctrl, dox)
+
+
+
+```
+
+
+#### run maSigPro
+```{r}
+
+
+
+
+
+```
+
