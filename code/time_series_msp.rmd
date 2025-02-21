@@ -3,49 +3,253 @@ suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(maSigPro))
 suppressPackageStartupMessages(library(DESeq2))
 suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(limma))
+suppressPackageStartupMessages(library(PCAtools))
 
 source("/project/imoskowitz/shared/software/helper_functions/carlosFunc_3.R")
 source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
 
 RC1_RC7_DESeq2 <- readRDS("./data/dds_RC1_RC7_DESeq2_batch_correction.rds")
-
+RC1_RC7_combat <- readRDS("./data/dds_RC1_RC7_combat.rds")
 
 ```
 
 #### prepare data for maSigPro
 ```{r}
 
-stage_order <- c("D4", "D5", "D5.6h", "D6", "D7", "D8", "D12")
+stage_order <- c( "D5", "D5.6h", "D6", "D8")
 rep_factor <- colData(RC1_RC7_DESeq2)$time_condition %>%
-factor(levels = c("D4_ctrl", "D5_ctrl", "D5.6h_ctrl",
-"D6_ctrl", "D7_ctrl", "D8_ctrl", "D12_ctrl")) %>%
+factor(levels = c("D5_ctrl", "D5.6h_ctrl",
+"D6_ctrl", "D8_ctrl")) %>%
 as.numeric()
 # Apply custom ordering
 colData(RC1_RC7_DESeq2) %>% 
 data.frame() %>%
-subset(., !Age.stage=="mESC") %>%
-select(Age.stage, treatment, time_condition) %>%
+subset(., !Age.stage %in% c("mESC", "D4", "D7", "D12")
+& !treatment %in% c("dox", "oe")) %>%
+dplyr::select(Age.stage, treatment, time_condition) %>%
 mutate(Age.stage = factor(Age.stage, levels = stage_order)) %>%
 .[order(.$Age.stage, decreasing = FALSE),] %>%
 mutate(Replicate = as.numeric(factor(time_condition,
-    levels=c("D4_ctrl", "D5_ctrl", "D5.6h_ctrl","D5.6h_dox",   
-    "D6_ctrl", "D6_dox", "D7_ctrl", "D7_dox", "D8_ctrl", "D8_dox", "D12_ctrl", "D12_dox")) )) %>%
+    levels=c("D5_ctrl", "D5.6h_ctrl","D6_ctrl", "D8_ctrl")) )) %>%
 mutate(Time = as.numeric(Age.stage)) %>%
 mutate(ctrl = as.numeric(treatment == "ctrl")) %>%
-mutate(dox = as.numeric(treatment %in% c("dox", "oe"))) %>%
-select(Time,Replicate, ctrl, dox)
+dplyr::select(Time,Replicate, ctrl) -> msp_metadata
 
 
 
 ```
 
+It looks like DESeq2 does not return batch-correct normalized counts.
+They are only used for the dispersion estimation and for foldchange/pvalue calculation.
+will do limma voom batch correction followed by combat and compare performance.
+#### run maSigPro with limma batch correction
+```{r}
 
-#### run maSigPro
+xncounts <- counts(RC1_RC7_DESeq2, normalized = TRUE) %>%
+data.frame() %>%
+dplyr::select(all_of(rownames(msp_metadata))) %>%
++1 %>%
+log2()
+counts_afterbatchcorrection <- limma::removeBatchEffect(xncounts, RC1_RC7_DESeq2$Batch)
+
+
+p.vec.obj <- p.vector( counts_afterbatchcorrection, 
+    make.design.matrix( msp_metadata, degree = 4), 
+    Q = 0.01, MT.adjust = "BH", 
+    counts = T) 
+
+t.fit.obj <- T.fit(data=p.vec.obj, 
+    step.method = "backward") 
+
+
+get.siggens.obj <- get.siggenes(t.fit.obj, rsq = 0.6, vars = 'groups') 
+
+
+```
+
+
+
+#### plot elbow plot
+```{r, elbow plot}
+
+#Elbow Method for finding the optimal number of clusters
+set.seed(123)
+# Compute and plot wss for k = 2 to k = 15.
+k.max <- 9
+data <- counts_afterbatchcorrection
+data <- subset(counts_afterbatchcorrection,
+rownames(counts_afterbatchcorrection) %in% get.siggens.obj$summary[,1])
+wss <- sapply(1:k.max, 
+               function(k){kmeans(data, k, nstart=50,iter.max = 15 )$tot.withinss})
+
+plot(1:k.max, wss,
+      type="b", pch = 19, frame = FALSE, 
+      xlab="Number of clusters K",
+      ylab="Total within-clusters sum of squares")
+```
+
+
+Lets go with 9 clusters.
+```{r, plot time series and get results, warning=FALSE, message=FALSE}
+source("./code/see_genes_edit.R")
+
+pdf("./pdfs/time_series_msp_ctrl_limma_batch_correction.pdf")
+see.genes(get.siggens.obj$sig.genes$ctrl, 
+    color.mode='gray',cexlab=1,show.fit = F,
+    cex=1,k = 9, newX11=F)
+dev.off()
+
+
+
+see.genes.ob_edit <- see.genes_edit(get.siggens.obj$sig.genes$ctrl, 
+    color.mode='gray',cexlab=1,
+    cex=1,k = 9, newX11=T)
+
+geneGroups <- see.genes.ob_edit$cut %>% 
+data.frame() %>%
+rownames_to_column("geneSymbol")
+colnames(geneGroups)[2] <- "cluster" 
+
+write.csv(geneGroups, "./data/geneGroups_maSigPro_ctrl_limma_batch_correction.csv")
+
+
+```
+
+
+```{r, plot GO for select clusters, warning=FALSE, message=FALSE}
+
+list_of_genes <- list   (
+cluster_1ctrl = subset(geneGroups, cluster == 1)$geneSymbol,
+cluster_2ctrl = subset(geneGroups, cluster == 2)$geneSymbol,
+cluster_3ctrl = subset(geneGroups, cluster == 3)$geneSymbol,
+cluster_4ctrl = subset(geneGroups, cluster == 4)$geneSymbol,
+cluster_5ctrl = subset(geneGroups, cluster == 5)$geneSymbol,
+cluster_6ctrl = subset(geneGroups, cluster == 6)$geneSymbol,
+cluster_7ctrl = subset(geneGroups, cluster == 7)$geneSymbol,
+cluster_8ctrl = subset(geneGroups, cluster == 8)$geneSymbol,
+cluster_9ctrl = subset(geneGroups, cluster == 9)$geneSymbol
+)
+
+for (i in 1:length(list_of_genes)) {
+    
+y <- runGO(test.vector = list_of_genes[[i]],
+univr_vector = rownames(counts_afterbatchcorrection),
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+    
+plotGO(obj = y,
+topTerms = 5,
+muhcolor = "plum4",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0))
+    
+ggsave(filename = paste0("GO_BP_maSigPro_ctrl_limma_batch_correction_", names(list_of_genes)[i], ".pdf"),
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5,
+path = "pdfs")
+
+writexl::write_xlsx(
+  data.frame(y),
+  paste0("data/Table_GO_BP_maSigPro_ctrl_limma_batch_correction_", names(list_of_genes)[i], ".xlsx"))   
+
+}
+
+
+```
+
+
+#### run maSigPro with combat batch correction
 ```{r}
 
 
+xncounts <- counts(RC1_RC7_combat, normalized = TRUE) %>%
+data.frame() %>%
+dplyr::select(all_of(rownames(msp_metadata))) %>%
++1 %>%
+log2()
+
+p.vec.obj <- p.vector( xncounts, 
+    make.design.matrix( msp_metadata, degree = 4), 
+    Q = 0.01, MT.adjust = "BH", 
+    counts = T) 
+
+t.fit.obj <- T.fit(data=p.vec.obj, 
+    step.method = "backward") 
+
+get.siggens.obj <- get.siggenes(t.fit.obj, rsq = 0.6, vars = 'groups') 
 
 
+pdf("./pdfs/time_series_msp_ctrl_combat_batch_correction.pdf")
+see.genes(get.siggens.obj$sig.genes$ctrl, 
+    color.mode='gray',cexlab=1,show.fit = F,
+    cex=1,k = 9, newX11=F)
+dev.off()
+
+
+
+see.genes.ob_edit <- see.genes_edit(get.siggens.obj$sig.genes$ctrl, 
+    color.mode='gray',cexlab=1,
+    cex=1,k = 9, newX11=T)
+
+geneGroups <- see.genes.ob_edit$cut %>% 
+data.frame() %>%
+rownames_to_column("geneSymbol")
+colnames(geneGroups)[2] <- "cluster" 
+
+write.csv(geneGroups, "./data/geneGroups_maSigPro_ctrl_combat_batch_correction.csv")
 
 ```
 
+
+#### plot GO for select clusters; combat batch correction
+```{r, plot GO for select clusters, warning=FALSE, message=FALSE}
+
+data <- subset(xncounts,
+rownames(xncounts) %in% get.siggens.obj$summary[,1])
+
+
+list_of_genes <- list   (
+cluster_1ctrl = subset(geneGroups, cluster == 1)$geneSymbol,
+cluster_2ctrl = subset(geneGroups, cluster == 2)$geneSymbol,
+cluster_3ctrl = subset(geneGroups, cluster == 3)$geneSymbol,
+cluster_4ctrl = subset(geneGroups, cluster == 4)$geneSymbol,
+cluster_5ctrl = subset(geneGroups, cluster == 5)$geneSymbol,
+cluster_6ctrl = subset(geneGroups, cluster == 6)$geneSymbol,
+cluster_7ctrl = subset(geneGroups, cluster == 7)$geneSymbol,
+cluster_8ctrl = subset(geneGroups, cluster == 8)$geneSymbol,
+cluster_9ctrl = subset(geneGroups, cluster == 9)$geneSymbol
+)
+
+for (i in 1:length(list_of_genes)) {
+    
+y <- runGO(test.vector = list_of_genes[[i]],
+univr_vector = rownames(data),
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+    
+plotGO(obj = y,
+topTerms = 5,
+muhcolor = "plum4",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0))
+    
+ggsave(filename = paste0("GO_BP_maSigPro_ctrl_combat_batch_correction_", names(list_of_genes)[i], ".pdf"),
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5,
+path = "pdfs")
+
+writexl::write_xlsx(
+  data.frame(y),
+  paste0("data/Table_GO_BP_maSigPro_ctrl_combat_batch_correction_", names(list_of_genes)[i], ".xlsx"))   
+
+}
+
+
+```
