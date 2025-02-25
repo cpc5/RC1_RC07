@@ -28,6 +28,7 @@ data.frame() %>%
 subset(., !Age.stage %in% c("mESC", "D4", "D7", "D12")
 & !treatment %in% c("dox", "oe")) %>%
 dplyr::select(Age.stage, treatment, time_condition) %>%
+.[str_order(.$Age.stage, numeric = TRUE),] %>%
 mutate(Age.stage = factor(Age.stage, levels = stage_order)) %>%
 .[order(.$Age.stage, decreasing = FALSE),] %>%
 mutate(Replicate = as.numeric(factor(time_condition,
@@ -55,7 +56,7 @@ counts_afterbatchcorrection <- limma::removeBatchEffect(xncounts, RC1_RC7_DESeq2
 
 
 p.vec.obj <- p.vector( counts_afterbatchcorrection, 
-    make.design.matrix( msp_metadata, degree = 4), 
+    make.design.matrix( msp_metadata, degree = 3), 
     Q = 0.01, MT.adjust = "BH", 
     counts = T) 
 
